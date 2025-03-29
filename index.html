@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stance Detection Feedback</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Stance Detection Feedback</h1>
+        <label for="tweet">Tweet:</label>
+        <textarea id="tweet" placeholder="Enter tweet..."></textarea>
+
+        <label for="target">Target:</label>
+        <input type="text" id="target" placeholder="Enter target...">
+
+        <button onclick="predictStance()">Predict Stance</button>
+
+        <h3 id="prediction"></h3>
+
+        <div id="feedback-section" style="display: none;">
+            <label>Was the prediction correct?</label>
+            <button onclick="submitFeedback(true)">✅ Yes</button>
+            <button onclick="submitFeedback(false)">❌ No</button>
+
+            <label for="correct-stance">If wrong, correct stance:</label>
+            <select id="correct-stance">
+                <option value="NEUTRAL">NEUTRAL</option>
+                <option value="AGAINST">AGAINST</option>
+                <option value="FAVOR">FAVOR</option>
+            </select>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
