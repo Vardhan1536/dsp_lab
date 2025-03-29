@@ -3,14 +3,21 @@ import torch
 from transformers import AutoTokenizer
 from pymongo import MongoClient
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 app = Flask(__name__)
 
 # MongoDB Configuration
-MONGO_URI = "mongodb+srv://<username>:<password>@<cluster>.mongodb.net/stance_feedback"
+MONGO_URI = os.getenv("MONGO_URI")
+DB_NAME = os.getenv("DB_NAME", "stance_db")  # Default: stance_db
+COLLECTION_NAME = os.getenv("COLLECTION_NAME", "feedback")  # Default: feedback
+
 client = MongoClient(MONGO_URI)
-db = client["stance_db"]
-feedback_collection = db["feedback"]
+db = client[DB_NAME]
+feedback_collection = db[COLLECTION_NAME]
 
 # Load trained RLHF stance detection model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
