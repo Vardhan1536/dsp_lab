@@ -2,11 +2,10 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import torch
 from transformers import AutoTokenizer, AutoModel
+import torch.nn as nn
 from pymongo import MongoClient
 import os
 from dotenv import load_dotenv
-import torch.nn as nn
-
 from fastapi.middleware.cors import CORSMiddleware
 
 # FastAPI app initialization
@@ -21,18 +20,17 @@ app.add_middleware(
     allow_headers=["*"],  # Allow all HTTP headers
 )
 
-# Define PPOPolicyModel (same as in Kaggle)
-class PPOPolicyModel(nn.Module):
-    def __init__(self, base_model):
-        super(PPOPolicyModel, self).__init__()
-        self.base_model = base_model
-        self.policy_head = nn.Linear(768, 3)  # Favor, Against, Neutral
+# Define the SimCSE model (directly using your pretrained model)
+class SimCSEStanceModel(nn.Module):
+    def __init__(self, model_name="roberta-base"):
+        super().__init__()
+        self.encoder = AutoModel.from_pretrained(model_name)
+        self.projection = nn.Linear(self.encoder.config.hidden_size, 128)  # 128-dim contrastive space
 
     def forward(self, input_ids, attention_mask):
-        outputs = self.base_model(input_ids, attention_mask=attention_mask)
-        pooled_output = outputs.last_hidden_state[:, 0, :]
-        logits = self.policy_head(pooled_output)
-        return logits
+        outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
+        embeddings = self.projection(outputs.pooler_output)
+        return nn.functional.normalize(embeddings, dim=-1)  # Normalize embeddings
 
 # Load environment variables
 load_dotenv()
@@ -46,17 +44,17 @@ client = MongoClient(MONGO_URI)
 db = client[DB_NAME]
 feedback_collection = db[COLLECTION_NAME]
 
-# Model Loading
-MODEL_NAME = "princeton-nlp/sup-simcse-roberta-base"
+# Tokenizer & Model Loading
+MODEL_NAME = "roberta-base"  # Adjust to your SimCSE model name
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-simcse_model = AutoModel.from_pretrained(MODEL_NAME)
+simcse_model = SimCSEStanceModel(MODEL_NAME)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Initialize the PPO Policy Model
-model = PPOPolicyModel(simcse_model).to(device)
-model.load_state_dict(torch.load("ppo_trained_model.pth", map_location=device))
-model.eval()
+# Load your pretrained SimCSE model
+simcse_model.load_state_dict(torch.load("simcse_stance_model.pth", map_location=device))
+simcse_model.to(device)
+simcse_model.eval()
 
 # Request Body Models
 class StanceRequest(BaseModel):
@@ -69,17 +67,25 @@ class FeedbackRequest(BaseModel):
     predicted_stance: str
     human_stance: str
 
-# Prediction function
 def predict_stance(tweet: str, target: str) -> str:
     input_text = f"Tweet: {tweet} Target: {target}"
     inputs = tokenizer(input_text, return_tensors="pt", truncation=True, padding=True).to(device)
 
     with torch.no_grad():
-        logits = model(inputs.input_ids, inputs.attention_mask)
+        embeddings = simcse_model(inputs.input_ids, inputs.attention_mask)
     
-    predicted_label = torch.argmax(logits, dim=-1).item()
+    # Assuming embeddings are normalized and we classify based on cosine similarity or clustering
     stance_map = {0: "FAVOR", 1: "AGAINST", 2: "NEUTRAL"}
+
+    predicted_label = torch.argmax(embeddings, dim=-1).item()  # Assuming we want to classify as 0, 1, 2
+
+    # Ensure the predicted label is within the expected range
+    if predicted_label not in stance_map:
+        # If the predicted label is outside the valid range, return a default stance (e.g., "NEUTRAL")
+        return "NEUTRAL"
+
     return stance_map[predicted_label]
+
 
 @app.post("/predict_stance")
 def get_prediction(request: StanceRequest):
