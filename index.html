@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Stance Detection Feedback</title>
     <link rel="stylesheet" href="styles.css">
+    <style>
+        .selected { background-color: #4CAF50; color: white; }
+    </style>
 </head>
 <body>
     <div class="container">
@@ -21,18 +24,101 @@
 
         <div id="feedback-section" style="display: none;">
             <label>Was the prediction correct?</label>
-            <button onclick="submitFeedback(true)">✅ Yes</button>
-            <button onclick="submitFeedback(false)">❌ No</button>
+            <button id="yes-btn" onclick="handleFeedback(true)">✅ Yes</button>
+            <button id="no-btn" onclick="handleFeedback(false)">❌ No</button>
+            
+            <div id="correction-section" style="display: none;">
+                <label for="correct-stance">If wrong, correct stance:</label>
+                <select id="correct-stance">
+                    <option value="NEUTRAL">NEUTRAL</option>
+                    <option value="AGAINST">AGAINST</option>
+                    <option value="FAVOR">FAVOR</option>
+                </select>
+            </div>
 
-            <label for="correct-stance">If wrong, correct stance:</label>
-            <select id="correct-stance">
-                <option value="NEUTRAL">NEUTRAL</option>
-                <option value="AGAINST">AGAINST</option>
-                <option value="FAVOR">FAVOR</option>
-            </select>
+            <button id="submit-btn" onclick="submitFeedback()" disabled>Submit</button>
         </div>
     </div>
 
-    <script src="script.js"></script>
+    <script>
+        const apiBaseUrl = "http://127.0.0.1:8000";
+        let feedbackCorrect = null;
+
+        async function predictStance() {
+            const tweet = document.getElementById('tweet').value.trim();
+            const target = document.getElementById('target').value.trim();
+            
+            if (!tweet || !target) {
+                alert("Please enter both tweet and target.");
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${apiBaseUrl}/predict_stance`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ tweet, target })
+                });
+                
+                if (!response.ok) throw new Error("Failed to fetch stance");
+                const data = await response.json();
+                
+                document.getElementById('prediction').innerText = `Predicted Stance: ${data.predicted_stance}`;
+                document.getElementById('prediction').setAttribute('data-stance', data.predicted_stance);
+                document.getElementById('feedback-section').style.display = "block";
+            } catch (error) {
+                alert("Error predicting stance. Please try again.");
+            }
+        }
+
+        function handleFeedback(correct) {
+            feedbackCorrect = correct;
+            document.getElementById("submit-btn").disabled = false;
+            
+            if (correct) {
+                document.getElementById("correction-section").style.display = "none";
+                document.getElementById("yes-btn").classList.add("selected");
+                document.getElementById("no-btn").classList.remove("selected");
+            } else {
+                document.getElementById("correction-section").style.display = "block";
+                document.getElementById("no-btn").classList.add("selected");
+                document.getElementById("yes-btn").classList.remove("selected");
+            }
+        }
+
+        async function submitFeedback() {
+            const tweet = document.getElementById('tweet').value;
+            const target = document.getElementById('target').value;
+            const predictedStance = document.getElementById('prediction').getAttribute('data-stance');
+            let correctStance = predictedStance;
+
+            if (!feedbackCorrect) {
+                correctStance = document.getElementById('correct-stance').value;
+            }
+            
+            if (!confirm("Are you sure you want to submit this feedback?")) {
+                return;
+            }
+
+            const feedbackData = {
+                tweet,
+                target,
+                predicted_stance: predictedStance,
+                human_stance: correctStance
+            };
+            
+            try {
+                await fetch(`${apiBaseUrl}/store_feedback`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(feedbackData)
+                });
+                alert("Feedback submitted successfully!");
+                window.location.reload(); // Refresh page after submission
+            } catch (error) {
+                alert("Error submitting feedback. Please try again.");
+            }
+        }
+    </script>
 </body>
 </html>

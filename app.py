@@ -1,15 +1,41 @@
-from flask import Flask, request, jsonify
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 import torch
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoModel
 from pymongo import MongoClient
 import os
 from dotenv import load_dotenv
-from transformers import AutoModelForSequenceClassification
+import torch.nn as nn
 
-# Load environment variables from .env file
+from fastapi.middleware.cors import CORSMiddleware
+
+# FastAPI app initialization
+app = FastAPI()
+
+# Enable CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all domains (change this in production)
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all HTTP methods
+    allow_headers=["*"],  # Allow all HTTP headers
+)
+
+# Define PPOPolicyModel (same as in Kaggle)
+class PPOPolicyModel(nn.Module):
+    def __init__(self, base_model):
+        super(PPOPolicyModel, self).__init__()
+        self.base_model = base_model
+        self.policy_head = nn.Linear(768, 3)  # Favor, Against, Neutral
+
+    def forward(self, input_ids, attention_mask):
+        outputs = self.base_model(input_ids, attention_mask=attention_mask)
+        pooled_output = outputs.last_hidden_state[:, 0, :]
+        logits = self.policy_head(pooled_output)
+        return logits
+
+# Load environment variables
 load_dotenv()
-
-app = Flask(__name__)
 
 # MongoDB Configuration
 MONGO_URI = os.getenv("MONGO_URI")
@@ -20,49 +46,47 @@ client = MongoClient(MONGO_URI)
 db = client[DB_NAME]
 feedback_collection = db[COLLECTION_NAME]
 
-# Load trained RLHF stance detection model
+# Model Loading
+MODEL_NAME = "princeton-nlp/sup-simcse-roberta-base"
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+simcse_model = AutoModel.from_pretrained(MODEL_NAME)
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Load the entire model directly
-model = torch.load("ppo_trained_model.pth", map_location=device)
-model.to(device)
+# Initialize the PPO Policy Model
+model = PPOPolicyModel(simcse_model).to(device)
+model.load_state_dict(torch.load("ppo_trained_model.pth", map_location=device))
 model.eval()
 
-# Load tokenizer
-tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-# Stance prediction function
-def predict_stance(tweet, target):
-    input_text = f"Does the tweet '{tweet}' express Favor, Against, or Neutral stance toward '{target}'?"
+# Request Body Models
+class StanceRequest(BaseModel):
+    tweet: str
+    target: str
+
+class FeedbackRequest(BaseModel):
+    tweet: str
+    target: str
+    predicted_stance: str
+    human_stance: str
+
+# Prediction function
+def predict_stance(tweet: str, target: str) -> str:
+    input_text = f"Tweet: {tweet} Target: {target}"
     inputs = tokenizer(input_text, return_tensors="pt", truncation=True, padding=True).to(device)
-    if "token_type_ids" in inputs:
-        del inputs["token_type_ids"]
-    logits = model(**inputs)
-    predicted_label = torch.argmax(logits.logits if hasattr(logits, "logits") else logits, dim=-1).item()
-    stance_map = {0: "NEUTRAL", 1: "AGAINST", 2: "FAVOR"}
+
+    with torch.no_grad():
+        logits = model(inputs.input_ids, inputs.attention_mask)
+    
+    predicted_label = torch.argmax(logits, dim=-1).item()
+    stance_map = {0: "FAVOR", 1: "AGAINST", 2: "NEUTRAL"}
     return stance_map[predicted_label]
 
-@app.route('/predict_stance', methods=['POST'])
-def get_prediction():
-    data = request.json
-    tweet = data.get("tweet")
-    target = data.get("target")
+@app.post("/predict_stance")
+def get_prediction(request: StanceRequest):
+    stance = predict_stance(request.tweet, request.target)
+    return {"predicted_stance": stance}
 
-    if not tweet or not target:
-        return jsonify({"error": "Tweet and Target required"}), 400
-
-    stance = predict_stance(tweet, target)
-    return jsonify({"predicted_stance": stance}), 200
-
-@app.route('/store_feedback', methods=['POST'])
-def store_feedback():
-    data = request.json
-    if not data:
-        return jsonify({"error": "No data received"}), 400
-    
-    # Insert feedback into MongoDB
-    feedback_collection.insert_one(data)
-    
-    return jsonify({"message": "Feedback stored successfully"}), 200
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+@app.post("/store_feedback")
+def store_feedback(request: FeedbackRequest):
+    feedback_collection.insert_one(request.dict())
+    return {"message": "Feedback stored successfully"}
