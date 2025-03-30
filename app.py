@@ -4,6 +4,7 @@ from transformers import AutoTokenizer
 from pymongo import MongoClient
 import os
 from dotenv import load_dotenv
+from transformers import AutoModelForSequenceClassification
 
 # Load environment variables from .env file
 load_dotenv()
@@ -21,12 +22,14 @@ feedback_collection = db[COLLECTION_NAME]
 
 # Load trained RLHF stance detection model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Load the entire model directly
 model = torch.load("ppo_trained_model.pth", map_location=device)
+model.to(device)
 model.eval()
 
 # Load tokenizer
 tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-
 # Stance prediction function
 def predict_stance(tweet, target):
     input_text = f"Does the tweet '{tweet}' express Favor, Against, or Neutral stance toward '{target}'?"
